@@ -16,9 +16,10 @@ from tkinter import colorchooser, filedialog, messagebox
 import customtkinter as ctk
 
 from constants import (
-    ACCENT, APP_AUTHOR, APP_TITLE, BG_APP, BG_CANVAS, BG_SECTION,
-    BG_SIDEBAR, BORDER, CANVAS_H, CANVAS_W, LINE_DASHES, PURPLE, RED,
-    REFLECTION_AXES, SHAPES, TEXT_BRIGHT, TEXT_DIM, TRANSFORMS,
+    ACCENT, ANIM_TYPES, APP_AUTHOR, APP_TITLE, BG_APP, BG_CANVAS,
+    BG_SECTION, BG_SIDEBAR, BORDER, CANVAS_H, CANVAS_W, GREEN,
+    LINE_DASHES, PURPLE, RED, REFLECTION_AXES, SHAPES, TEXT_BRIGHT,
+    TEXT_DIM, TRANSFORMS,
 )
 from models import GrafisObjek
 from renderer import Renderer, flat, oval_to_poly, rect_to_poly
@@ -275,8 +276,10 @@ class RightPanel(ctk.CTkFrame):
         tab.pack(fill="x", padx=6, pady=6)
 
         tab.add("⚙ Transform")
+        tab.add("Animasi")
 
         self._build_transform_tab(tab.tab("⚙ Transform"), app)
+        self._build_anim_tab(tab.tab("Animasi"), app)
 
         # ── Daftar objek ──────────────────────────────────────────────────
         section_label(self, "📋  Daftar Objek")
@@ -326,6 +329,30 @@ class RightPanel(ctk.CTkFrame):
                  ).pack(fill="x", padx=6, pady=8)
 
 # ═══════════════════════════════════════════════════════════════════════════════
+    def _build_anim_tab(self, tab, app):
+        dim_label(tab, "Tipe Animasi")
+        app.anim_type_var = tk.StringVar(value="Rotasi")
+        make_combo(tab, app.anim_type_var, ANIM_TYPES)
+
+        dim_label(tab, "Kecepatan")
+        sp_row = ctk.CTkFrame(tab, fg_color="transparent")
+        sp_row.pack(fill="x", padx=10, pady=(0,6))
+        app._sp_lbl = ctk.CTkLabel(sp_row, text=" 5",
+                                   width=28,
+                                   font=ctk.CTkFont("Segoe UI",10,"bold"),
+                                   text_color=ACCENT)
+        app._sp_lbl.pack(side="right")
+        ctk.CTkSlider(sp_row, from_=1, to=20,
+                      variable=app.anim_speed_var,
+                      command=lambda v: app._sp_lbl.configure(
+                          text=f"{int(float(v)):2d}"),
+                      progress_color=GREEN, button_color=GREEN,
+                      button_hover_color=_darken(GREEN)
+                      ).pack(side="left", fill="x", expand=True)
+
+        app.anim_btn = make_btn(tab, "▶  Mulai Animasi",
+                                app._toggle_animation, GREEN)
+        app.anim_btn.pack(fill="x", padx=6, pady=4)
 #  PARAMETER PANEL (dinamis, di dalam tab Transform)
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -377,6 +404,7 @@ class GrafikaApp:
         self.outline_color   = "#1e40af"
         self.line_width_var  = tk.DoubleVar(value=2)
         self.line_dash_var   = tk.StringVar(value="Solid")
+        self.anim_speed_var  = tk.DoubleVar(value=5)
 
         # ── Drawing state ───────────────────────────────────────────────────
         self._temp_ids:   list  = []
@@ -393,6 +421,11 @@ class GrafikaApp:
         # ── Rubber-band selection state ──────────────────────────────────────
         self._rb_start          = None   # titik awal rubber-band
         self._rb_rect_id        = None   # canvas id kotak sementara
+
+        self._anim_running  = False
+        self._anim_after_id = None
+        self._anim_step     = 0
+        self._anim_snapshot = []
 
         self._build_ui()
 
@@ -1106,6 +1139,8 @@ class GrafikaApp:
         if not targets:
             messagebox.showwarning("Peringatan",
                                    "Pilih objek terlebih dahulu!"); return
+        if self._anim_running:
+            self._stop_animation()
         self._save_history()
         t   = self.transform_var.get()
         ccx,ccy = self._canvas_center()
@@ -1149,6 +1184,74 @@ class GrafikaApp:
     #  UNDO / REDO
     # ══════════════════════════════════════════════════════════════════════════
 
+    def _toggle_animation(self):
+        if self._anim_running:
+            self._stop_animation()
+        else:
+            self._start_animation()
+
+    def _start_animation(self):
+        if not self.selected:
+            messagebox.showwarning("Animasi", "Pilih objek terlebih dahulu!")
+            return
+        if len(self.selected_set) > 1:
+            messagebox.showwarning(
+                "Animasi",
+                "Animasi hanya berjalan pada 1 objek.\n"
+                "Objek aktif yang dipakai: " + self.selected.name)
+
+        self._anim_running = True
+        self._anim_step = 0
+        self._anim_snapshot = self.selected.points[:]
+        self.anim_btn.configure(text="■  Hentikan Animasi", fg_color=RED,
+                                hover_color=_darken(RED))
+        self.status_var.set(f"▶ Animasi berjalan: {self.selected.name}")
+        self._anim_loop()
+
+    def _stop_animation(self):
+        self._anim_running = False
+        if self._anim_after_id:
+            self.root.after_cancel(self._anim_after_id)
+            self._anim_after_id = None
+        if self.selected and self._anim_snapshot:
+            self.selected.points = self._anim_snapshot[:]
+            self.renderer.render(self.selected, on_click=self._select_object)
+            self._select_object(self.selected)
+        self.anim_btn.configure(text="▶  Mulai Animasi", fg_color=GREEN,
+                                hover_color=_darken(GREEN))
+        self.status_var.set("■ Animasi dihentikan.")
+
+    def _anim_loop(self):
+        if not self._anim_running or not self.selected:
+            return
+
+        obj = self.selected
+        atyp = self.anim_type_var.get()
+        spd = float(self.anim_speed_var.get())
+        st = self._anim_step
+
+        if atyp == "Rotasi":
+            M = rotate_matrix(spd * 0.4, *obj.center())
+        elif atyp == "Translasi Kanan-Kiri":
+            tx = spd * math.sin(math.radians(st * 3))
+            M = translate_matrix(tx, 0)
+        elif atyp == "Skala Pulse":
+            f = 1 + 0.015 * spd * math.sin(math.radians(st * 4))
+            M = scale_matrix(f, f, *obj.center())
+        elif atyp == "Skew Kiri-Kanan":
+            ang = spd * math.sin(math.radians(st * 3))
+            M = skew_matrix(ang, 0, *obj.center())
+        else:
+            M = [[1,0,0],[0,1,0],[0,0,1]]
+
+        obj.points = apply_matrix(obj.points, M)
+        self.renderer.render(obj, on_click=self._select_object)
+        self.renderer.highlight(obj)
+
+        self._anim_step += 1
+        interval = max(16, 60 - int(spd) * 2)
+        self._anim_after_id = self.root.after(interval, self._anim_loop)
+
     def _save_history(self):
         self.history.append([o.clone() for o in self.objects])
         self.redo_stack.clear()
@@ -1169,6 +1272,8 @@ class GrafikaApp:
         self.status_var.set("↪ Redo berhasil.")
 
     def _restore_snapshot(self, snap):
+        if self._anim_running:
+            self._stop_animation()
         self._deselect()
         for o in self.objects:
             for cid in o.canvas_ids: self.canvas.delete(cid)
@@ -1187,6 +1292,8 @@ class GrafikaApp:
         targets = self.selected_set if self.selected_set else (
             [self.selected] if self.selected else [])
         if not targets: return
+        if self._anim_running:
+            self._stop_animation()
         self._save_history()
         for obj in targets:
             for cid in obj.canvas_ids: self.canvas.delete(cid)
@@ -1270,6 +1377,8 @@ class GrafikaApp:
     def _clear_all(self):
         if not self.objects: return
         if not messagebox.askyesno("Konfirmasi","Hapus semua objek?"): return
+        if self._anim_running:
+            self._stop_animation()
         self._save_history(); self._deselect()
         for o in self.objects:
             for cid in o.canvas_ids: self.canvas.delete(cid)
@@ -1284,6 +1393,8 @@ class GrafikaApp:
         if confirm and self.objects:
             if not messagebox.askyesno("Baru","Hapus semua dan mulai kanvas baru?"):
                 return False
+        if self._anim_running:
+            self._stop_animation()
         self._deselect()
         for o in self.objects:
             for cid in o.canvas_ids: self.canvas.delete(cid)
@@ -1362,6 +1473,7 @@ class GrafikaApp:
             "    Skew (Kiri/Kanan/Atas/Bawah)\n"
             "    Refleksi (Sumbu X/Y, y=x, y=-x, Garis Kustom)\n"
             "    Visualisasi Garis Cermin\n\n"
+            "  Animasi: Rotasi, Translasi, Pulse, Skew\n"
             "  Undo/Redo · Simpan/Buka (JSON)")
 
 
