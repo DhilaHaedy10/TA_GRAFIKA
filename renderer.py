@@ -81,11 +81,6 @@ class Renderer:
         ids = [x for x in [cid, cid_outline] if x is not None]
         if ids:
             obj.canvas_ids = ids
-            if on_click:
-                for _id in ids:
-                    self.canvas.tag_bind(
-                        _id, "<Button-1>",
-                        lambda e, o=obj: on_click(o))
 
     # ── Move cepat saat drag (TANPA delete/recreate) ─────────────────────
     def move_item(self, obj: GrafisObjek, dx: float, dy: float):

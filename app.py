@@ -191,6 +191,8 @@ class LeftPanel(ctk.CTkScrollableFrame):
                  RED).pack(fill="x", padx=10, pady=2)
         make_btn(self, "🗑  Hapus Semua",  app._clear_all,
                  "#7f1d1d").pack(fill="x", padx=10, pady=(2,6))
+        make_btn(self, "🎨  Warnai Perpotongan", app._color_intersection,
+                 PURPLE).pack(fill="x", padx=10, pady=(2,6))
 
         separator(self)
 
@@ -203,6 +205,7 @@ class LeftPanel(ctk.CTkScrollableFrame):
             "Drag kosong  →  seleksi blok\n"
             "Ctrl+A  →  pilih semua\n"
             "Drag objek  →  pindahkan posisi\n"
+            "Pilih 2+ objek → warnai perpotongan\n"
             "Klik kosong  →  batalkan pilihan\n"
             "Double-klik  →  tutup Poligon\n"
             "Del  →  hapus objek dipilih\n"
@@ -383,6 +386,7 @@ class GrafikaApp:
 
         # ── Move (drag objek) state ──────────────────────────────────────────
         self._move_obj          = None   # objek yang sedang di-drag
+        self._move_targets      = []     # semua objek yang ikut pindah saat drag
         self._move_last_xy      = None   # posisi mouse terakhir saat drag
         self._move_saved_history = False  # history disimpan sekali sebelum drag
 
@@ -659,6 +663,7 @@ class GrafikaApp:
                         self._select_object(hit_obj)
                     # Mulai drag-move semua objek di set
                 self._move_obj     = hit_obj
+                self._move_targets = list(self.selected_set) if self.selected_set else [hit_obj]
                 self._move_last_xy = (x, y)
                 self._move_saved_history = False
                 self.canvas.config(cursor="fleur")
@@ -688,7 +693,7 @@ class GrafikaApp:
                 self._save_history()
                 self._move_saved_history = True
             self._move_last_xy = (event.x, event.y)
-            targets = self.selected_set if self.selected_set else [self._move_obj]
+            targets = self._move_targets or [self._move_obj]
             for obj in targets:
                 self.renderer.move_item(obj, dx, dy)
             self._apply_multi_highlight()
@@ -720,8 +725,9 @@ class GrafikaApp:
         # ── Selesai drag-move ─────────────────────────────────────────────
         if self._move_obj is not None:
             self.canvas.config(cursor="crosshair")
-            targets = self.selected_set if self.selected_set else [self._move_obj]
+            targets = self._move_targets or [self._move_obj]
             self._move_obj     = None
+            self._move_targets = []
             self._move_last_xy = None
             for obj in targets:
                 self.renderer.sync_coords(obj)
@@ -995,6 +1001,105 @@ class GrafikaApp:
     #  TERAPKAN TRANSFORMASI
     # ══════════════════════════════════════════════════════════════════════════
 
+    def _polygon_area(self, pts):
+        if len(pts) < 3:
+            return 0.0
+        return sum(
+            x1 * y2 - x2 * y1
+            for (x1, y1), (x2, y2) in zip(pts, pts[1:] + pts[:1])
+        ) / 2
+
+    def _line_intersection(self, p1, p2, p3, p4):
+        x1, y1 = p1; x2, y2 = p2
+        x3, y3 = p3; x4, y4 = p4
+        den = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
+        if abs(den) < 1e-9:
+            return p2
+        px = ((x1*y2 - y1*x2) * (x3 - x4) -
+              (x1 - x2) * (x3*y4 - y3*x4)) / den
+        py = ((x1*y2 - y1*x2) * (y3 - y4) -
+              (y1 - y2) * (x3*y4 - y3*x4)) / den
+        return (px, py)
+
+    def _clip_polygon(self, subject, clip):
+        if len(subject) < 3 or len(clip) < 3:
+            return []
+        clip_pts = list(clip)
+        if self._polygon_area(clip_pts) < 0:
+            clip_pts.reverse()
+
+        def inside(p, a, b):
+            return ((b[0] - a[0]) * (p[1] - a[1]) -
+                    (b[1] - a[1]) * (p[0] - a[0])) >= -1e-9
+
+        output = list(subject)
+        for a, b in zip(clip_pts, clip_pts[1:] + clip_pts[:1]):
+            input_pts = output
+            output = []
+            if not input_pts:
+                break
+            prev = input_pts[-1]
+            for curr in input_pts:
+                curr_in = inside(curr, a, b)
+                prev_in = inside(prev, a, b)
+                if curr_in:
+                    if not prev_in:
+                        output.append(self._line_intersection(prev, curr, a, b))
+                    output.append(curr)
+                elif prev_in:
+                    output.append(self._line_intersection(prev, curr, a, b))
+                prev = curr
+        return output
+
+    def _selected_area_objects(self):
+        targets = self.selected_set if self.selected_set else (
+            [self.selected] if self.selected else [])
+        return [obj for obj in targets
+                if obj and obj.shape != "Garis" and len(obj.points) >= 3]
+
+    def _color_intersection(self):
+        targets = self._selected_area_objects()
+        if len(targets) < 2:
+            messagebox.showwarning(
+                "Perpotongan",
+                "Pilih minimal 2 objek bidang yang saling bertumpuk.")
+            return
+
+        overlap = list(targets[0].points)
+        for obj in targets[1:]:
+            overlap = self._clip_polygon(overlap, obj.points)
+            if len(overlap) < 3 or abs(self._polygon_area(overlap)) < 1:
+                messagebox.showinfo(
+                    "Perpotongan",
+                    "Objek yang dipilih tidak memiliki area perpotongan.")
+                return
+
+        color = colorchooser.askcolor(
+            color=self.fill_color,
+            title="Pilih warna area perpotongan")[1]
+        if not color:
+            return
+
+        self._save_history()
+        overlap_obj = GrafisObjek(
+            "Area Perpotongan",
+            overlap,
+            fill=color,
+            outline=color,
+            line_width=1,
+            line_dash=())
+        overlap_obj.name = f"Perpotongan #{overlap_obj.id}"
+        self.objects.append(overlap_obj)
+        self.renderer.render(overlap_obj, on_click=self._select_object)
+        self.selected_set = [overlap_obj]
+        self.selected = overlap_obj
+        self._refresh_listbox()
+        self._apply_multi_highlight()
+        self._sync_listbox_selection()
+        self._sel_info_var.set(f"  {overlap_obj.name}  |  fill {color}")
+        self.status_var.set(
+            f"✓ Area perpotongan {len(targets)} objek diberi warna.")
+
     def _apply_transform(self):
         targets = self.selected_set if self.selected_set else (
             [self.selected] if self.selected else [])
@@ -1251,6 +1356,7 @@ class GrafikaApp:
             "  Output Primitif: Garis, Persegi, Persegi Panjang,\n"
             "    Lingkaran, Elips, Segitiga, Poligon Bebas\n\n"
             "  Atribut: Fill, Outline, Ketebalan, Tipe Garis\n\n"
+            "  Area Perpotongan: warna khusus untuk objek bertumpuk\n\n"
             "  Transformasi 2D:\n"
             "    Translasi · Rotasi · Skala\n"
             "    Skew (Kiri/Kanan/Atas/Bawah)\n"
