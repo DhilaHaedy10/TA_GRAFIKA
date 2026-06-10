@@ -3,7 +3,7 @@ renderer.py — rendering objek ke tkinter Canvas
 """
 import math
 import tkinter as tk
-from models import GrafisObjek
+from grafika.models import GrafisObjek
 
 
 # ─── Geometry helpers ────────────────────────────────────────────────────────
