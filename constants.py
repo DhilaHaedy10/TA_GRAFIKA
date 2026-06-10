@@ -59,11 +59,3 @@ REFLECTION_AXES = [
     "Garis Kustom (y = mx + b)",
 ]
 
-ANIM_TYPES = [
-    "Rotasi",
-    "Translasi Kanan-Kiri",
-    "Skala Pulse",
-    "Skew Kiri-Kanan",
-]
-
-ANIM_INTERVAL_MS = 30
