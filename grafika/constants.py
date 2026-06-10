@@ -1,6 +1,6 @@
 """constants.py — warna, ukuran, konfigurasi global."""
 
-APP_TITLE  = "Grafika Komputer — Semester Genap 2024/2025"
+APP_TITLE  = "Grafika Komputer — Semester Genap 2025/2026"
 APP_AUTHOR = "Herry Sofyan, S.T., M.Kom."
 
 CANVAS_W = 1000
