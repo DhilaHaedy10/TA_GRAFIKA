@@ -1,8 +1,11 @@
 """Komponen UI reusable untuk aplikasi grafika."""
 
 import tkinter as tk
-
+from typing import TYPE_CHECKING
 import customtkinter as ctk
+
+if TYPE_CHECKING:
+    from app import GrafikaApp
 
 from grafika.constants import (
     ACCENT, ANIM_TYPES, BG_SECTION, BG_SIDEBAR, BORDER, GREEN,
